@@ -140,6 +140,17 @@ router.get('/',
 );
 
 /**
+ * @route   GET /api/schools/stats
+ * @desc    Get statistics for the current school (uses X-School-Id header)
+ * @access  Authenticated + School Access
+ */
+router.get('/stats',
+  authenticate,
+  requireSchool,
+  schoolController.getSchoolStats
+);
+
+/**
  * @route   GET /api/schools/lookup/:key
  * @desc    Look up a school by its key (for joining)
  * @access  Public (limited info)

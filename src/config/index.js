@@ -8,7 +8,7 @@ export const config = {
   allowedOrigins: process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3000'],
   rateLimit: {
     windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000, // 15 minutes
-    max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100
+    max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 1000 // Increased for development
   }
 };
 

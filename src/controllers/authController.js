@@ -194,12 +194,64 @@ export const login = async (req, res, next) => {
         error: error.message
       });
     }
-    console.log(data.user)
+
+    const userEmail = email.toLowerCase();
+    let appRole = 'admin'; // Default for admins who register directly
+    let userData = null;
+
+    // Check if user is a student
+    const { data: student } = await supabaseAdmin
+      .from('students')
+      .select('id, first_name, last_name, school_id, grade, section')
+      .eq('email', userEmail)
+      .single();
+
+    if (student) {
+      appRole = 'student';
+      userData = student;
+    } else {
+      // Check if user is a teacher
+      const { data: teacher } = await supabaseAdmin
+        .from('teachers')
+        .select('id, first_name, last_name, school_id, department')
+        .eq('email', userEmail)
+        .single();
+
+      if (teacher) {
+        appRole = 'teacher';
+        userData = teacher;
+      } else {
+        // Check user_roles table for admins
+        const { data: userRole } = await supabaseAdmin
+          .from('user_roles')
+          .select('role:roles(name)')
+          .eq('user_id', data.user.id)
+          .single();
+
+        if (userRole?.role?.name) {
+          appRole = userRole.role.name;
+        }
+      }
+    }
+
+    // Build enhanced user response
+    const userResponse = {
+      id: data.user.id,
+      email: data.user.email,
+      role: appRole,
+      firstName: userData?.first_name || data.user.user_metadata?.first_name || '',
+      lastName: userData?.last_name || data.user.user_metadata?.last_name || '',
+      name: userData ? `${userData.first_name || ''} ${userData.last_name || ''}`.trim() : '',
+      schoolId: userData?.school_id || null
+    };
+
+    logger.info('Login successful', { email: userEmail, role: appRole });
+
     res.json({
       success: true,
       message: 'Login successful',
       data: {
-        user: data.user,
+        user: userResponse,
         session: data.session
       }
     });
@@ -523,7 +575,7 @@ export const generateMagicLink = async (req, res, next) => {
  */
 export const getUserSchool = async (req, res, next) => {
   try {
-    const userEmail = req.user.email;
+    const userEmail = req.user.email.toLowerCase();
 
     // Check cache first
     const cacheKey = cacheKeys.userSchool(userEmail);
