@@ -1,364 +1,248 @@
--- SchoolPortal Database Schema for Supabase
--- Run this SQL in your Supabase SQL Editor
+-- WARNING: This schema is for context only and is not meant to be run.
+-- Table order and constraints may not be valid for execution.
 
--- Enable UUID extension
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-
--- ============================================
--- ROLES TABLE
--- ============================================
-CREATE TABLE IF NOT EXISTS roles (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  name VARCHAR(50) UNIQUE NOT NULL,
-  description TEXT,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+CREATE TABLE public.admins (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  user_id uuid,
+  school_id uuid,
+  first_name character varying,
+  last_name character varying,
+  phone character varying,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT admins_pkey PRIMARY KEY (id),
+  CONSTRAINT admins_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id),
+  CONSTRAINT admins_school_id_fkey FOREIGN KEY (school_id) REFERENCES public.schools(id)
 );
-
--- Insert default roles
-INSERT INTO roles (name, description) VALUES
-  ('admin', 'System administrator with full access'),
-  ('teacher', 'Teacher with access to classes and grades'),
-  ('student', 'Student with access to own information'),
-  ('parent', 'Parent with access to child information'),
-  ('finance', 'Finance officer with billing access')
-ON CONFLICT (name) DO NOTHING;
-
--- ============================================
--- USERS TABLE
--- ============================================
-CREATE TABLE IF NOT EXISTS users (
-  id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
-  email VARCHAR(255) UNIQUE NOT NULL,
-  first_name VARCHAR(100),
-  last_name VARCHAR(100),
-  phone VARCHAR(20),
-  avatar_url TEXT,
-  status VARCHAR(20) DEFAULT 'active',
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+CREATE TABLE public.announcement_recipients (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  announcement_id uuid,
+  user_id uuid,
+  read_at timestamp with time zone,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT announcement_recipients_pkey PRIMARY KEY (id),
+  CONSTRAINT announcement_recipients_announcement_id_fkey FOREIGN KEY (announcement_id) REFERENCES public.announcements(id),
+  CONSTRAINT announcement_recipients_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id)
 );
-
--- ============================================
--- USER ROLES TABLE (Many-to-Many)
--- ============================================
-CREATE TABLE IF NOT EXISTS user_roles (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-  role_id UUID REFERENCES roles(id) ON DELETE CASCADE,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  UNIQUE(user_id, role_id)
+CREATE TABLE public.announcements (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  school_id uuid,
+  created_by uuid,
+  title character varying NOT NULL,
+  content text NOT NULL,
+  type character varying,
+  target_role character varying,
+  target_class_id uuid,
+  scheduled_for timestamp with time zone,
+  status character varying DEFAULT 'published'::character varying,
+  attachment_url text,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT announcements_pkey PRIMARY KEY (id),
+  CONSTRAINT announcements_school_id_fkey FOREIGN KEY (school_id) REFERENCES public.schools(id),
+  CONSTRAINT announcements_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(id),
+  CONSTRAINT announcements_target_class_id_fkey FOREIGN KEY (target_class_id) REFERENCES public.classes(id)
 );
-
--- ============================================
--- SCHOOLS TABLE
--- ============================================
-CREATE TABLE IF NOT EXISTS schools (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  name VARCHAR(255) NOT NULL,
-  school_key VARCHAR(50) UNIQUE,
-  logo_url TEXT,
-  address TEXT,
-  phone VARCHAR(20),
-  email VARCHAR(255),
-  website VARCHAR(255),
-  timezone VARCHAR(50) DEFAULT 'UTC',
-  academic_year_start DATE,
-  academic_year_end DATE,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+CREATE TABLE public.attendance (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  student_id uuid,
+  class_id uuid,
+  date date NOT NULL,
+  status character varying NOT NULL,
+  marked_by uuid,
+  notes text,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT attendance_pkey PRIMARY KEY (id),
+  CONSTRAINT attendance_student_id_fkey FOREIGN KEY (student_id) REFERENCES public.students(id),
+  CONSTRAINT attendance_class_id_fkey FOREIGN KEY (class_id) REFERENCES public.classes(id),
+  CONSTRAINT attendance_marked_by_fkey FOREIGN KEY (marked_by) REFERENCES public.teachers(id)
 );
-
--- ============================================
--- STUDENTS TABLE
--- ============================================
-CREATE TABLE IF NOT EXISTS students (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-  school_id UUID REFERENCES schools(id) ON DELETE CASCADE,
-  first_name VARCHAR(100) NOT NULL,
-  last_name VARCHAR(100) NOT NULL,
-  email VARCHAR(255),
-  date_of_birth DATE,
-  gender VARCHAR(20),
-  roll_number VARCHAR(50),
-  grade VARCHAR(20),
-  section VARCHAR(10),
-  admission_date DATE,
-  status VARCHAR(20) DEFAULT 'active',
-  address TEXT,
-  emergency_contact VARCHAR(20),
-  medical_info TEXT,
-  photo_url TEXT,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+CREATE TABLE public.class_enrollments (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  class_id uuid,
+  student_id uuid,
+  enrollment_date date DEFAULT CURRENT_DATE,
+  status character varying DEFAULT 'active'::character varying,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT class_enrollments_pkey PRIMARY KEY (id),
+  CONSTRAINT class_enrollments_class_id_fkey FOREIGN KEY (class_id) REFERENCES public.classes(id),
+  CONSTRAINT class_enrollments_student_id_fkey FOREIGN KEY (student_id) REFERENCES public.students(id)
 );
-
--- ============================================
--- TEACHERS TABLE
--- ============================================
-CREATE TABLE IF NOT EXISTS teachers (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-  school_id UUID REFERENCES schools(id) ON DELETE CASCADE,
-  first_name VARCHAR(100) NOT NULL,
-  last_name VARCHAR(100) NOT NULL,
-  email VARCHAR(255) UNIQUE NOT NULL,
-  phone VARCHAR(20),
-  department VARCHAR(100),
-  designation VARCHAR(100),
-  qualification VARCHAR(255),
-  hire_date DATE,
-  photo_url TEXT,
-  status VARCHAR(20) DEFAULT 'active',
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+CREATE TABLE public.class_teachers (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  class_id uuid,
+  teacher_id uuid,
+  subject character varying,
+  is_primary boolean DEFAULT false,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT class_teachers_pkey PRIMARY KEY (id),
+  CONSTRAINT class_teachers_class_id_fkey FOREIGN KEY (class_id) REFERENCES public.classes(id),
+  CONSTRAINT class_teachers_teacher_id_fkey FOREIGN KEY (teacher_id) REFERENCES public.teachers(id)
 );
-
--- ============================================
--- PARENTS TABLE
--- ============================================
-CREATE TABLE IF NOT EXISTS parents (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-  school_id UUID REFERENCES schools(id) ON DELETE CASCADE,
-  first_name VARCHAR(100) NOT NULL,
-  last_name VARCHAR(100) NOT NULL,
-  email VARCHAR(255) UNIQUE NOT NULL,
-  phone VARCHAR(20),
-  address TEXT,
-  occupation VARCHAR(100),
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+CREATE TABLE public.classes (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  school_id uuid,
+  name character varying NOT NULL,
+  grade character varying NOT NULL,
+  section character varying,
+  capacity integer,
+  room_number character varying,
+  academic_year character varying,
+  status character varying DEFAULT 'active'::character varying,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT classes_pkey PRIMARY KEY (id),
+  CONSTRAINT classes_school_id_fkey FOREIGN KEY (school_id) REFERENCES public.schools(id)
 );
-
--- ============================================
--- ADMINS TABLE
--- ============================================
-CREATE TABLE IF NOT EXISTS admins (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-  school_id UUID REFERENCES schools(id) ON DELETE CASCADE,
-  first_name VARCHAR(100),
-  last_name VARCHAR(100),
-  phone VARCHAR(20),
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+CREATE TABLE public.grades (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  student_id uuid,
+  class_id uuid,
+  teacher_id uuid,
+  subject character varying NOT NULL,
+  assessment_type character varying,
+  score numeric,
+  max_score numeric,
+  percentage numeric,
+  grade character varying,
+  comments text,
+  assessment_date date,
+  is_locked boolean DEFAULT false,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT grades_pkey PRIMARY KEY (id),
+  CONSTRAINT grades_student_id_fkey FOREIGN KEY (student_id) REFERENCES public.students(id),
+  CONSTRAINT grades_class_id_fkey FOREIGN KEY (class_id) REFERENCES public.classes(id),
+  CONSTRAINT grades_teacher_id_fkey FOREIGN KEY (teacher_id) REFERENCES public.teachers(id)
 );
-
--- ============================================
--- STUDENT-PARENT RELATIONS TABLE
--- ============================================
-CREATE TABLE IF NOT EXISTS student_parent_relations (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  student_id UUID REFERENCES students(id) ON DELETE CASCADE,
-  parent_id UUID REFERENCES parents(id) ON DELETE CASCADE,
-  relationship VARCHAR(50) NOT NULL, -- 'father', 'mother', 'guardian'
-  is_primary BOOLEAN DEFAULT false,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  UNIQUE(student_id, parent_id)
+CREATE TABLE public.invoices (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  student_id uuid,
+  invoice_number character varying NOT NULL UNIQUE,
+  amount numeric NOT NULL,
+  due_date date,
+  status character varying DEFAULT 'unpaid'::character varying,
+  description text,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT invoices_pkey PRIMARY KEY (id),
+  CONSTRAINT invoices_student_id_fkey FOREIGN KEY (student_id) REFERENCES public.students(id)
 );
-
--- ============================================
--- CLASSES TABLE
--- ============================================
-CREATE TABLE IF NOT EXISTS classes (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  school_id UUID REFERENCES schools(id) ON DELETE CASCADE,
-  name VARCHAR(100) NOT NULL,
-  grade VARCHAR(20) NOT NULL,
-  section VARCHAR(10),
-  capacity INTEGER,
-  room_number VARCHAR(50),
-  academic_year VARCHAR(20),
-  status VARCHAR(20) DEFAULT 'active',
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+CREATE TABLE public.parents (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  user_id uuid,
+  first_name character varying NOT NULL,
+  last_name character varying NOT NULL,
+  email character varying NOT NULL UNIQUE,
+  phone character varying,
+  address text,
+  occupation character varying,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  school_id uuid,
+  CONSTRAINT parents_pkey PRIMARY KEY (id),
+  CONSTRAINT parents_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id),
+  CONSTRAINT parents_school_id_fkey FOREIGN KEY (school_id) REFERENCES public.schools(id)
 );
-
--- ============================================
--- CLASS ENROLLMENTS TABLE
--- ============================================
-CREATE TABLE IF NOT EXISTS class_enrollments (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  class_id UUID REFERENCES classes(id) ON DELETE CASCADE,
-  student_id UUID REFERENCES students(id) ON DELETE CASCADE,
-  enrollment_date DATE DEFAULT CURRENT_DATE,
-  status VARCHAR(20) DEFAULT 'active',
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  UNIQUE(class_id, student_id)
+CREATE TABLE public.payments (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  invoice_id uuid,
+  amount numeric NOT NULL,
+  payment_date date DEFAULT CURRENT_DATE,
+  payment_method character varying,
+  transaction_id character varying,
+  notes text,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT payments_pkey PRIMARY KEY (id),
+  CONSTRAINT payments_invoice_id_fkey FOREIGN KEY (invoice_id) REFERENCES public.invoices(id)
 );
-
--- ============================================
--- CLASS TEACHERS TABLE
--- ============================================
-CREATE TABLE IF NOT EXISTS class_teachers (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  class_id UUID REFERENCES classes(id) ON DELETE CASCADE,
-  teacher_id UUID REFERENCES teachers(id) ON DELETE CASCADE,
-  subject VARCHAR(100),
-  is_primary BOOLEAN DEFAULT false,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  UNIQUE(class_id, teacher_id, subject)
+CREATE TABLE public.roles (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  name character varying NOT NULL UNIQUE,
+  description text,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT roles_pkey PRIMARY KEY (id)
 );
-
--- ============================================
--- GRADES TABLE
--- ============================================
-CREATE TABLE IF NOT EXISTS grades (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  student_id UUID REFERENCES students(id) ON DELETE CASCADE,
-  class_id UUID REFERENCES classes(id) ON DELETE CASCADE,
-  teacher_id UUID REFERENCES teachers(id) ON DELETE CASCADE,
-  subject VARCHAR(100) NOT NULL,
-  assessment_type VARCHAR(50), -- 'assignment', 'quiz', 'midterm', 'final'
-  score DECIMAL(5,2),
-  max_score DECIMAL(5,2),
-  percentage DECIMAL(5,2),
-  grade VARCHAR(5),
-  comments TEXT,
-  assessment_date DATE,
-  is_locked BOOLEAN DEFAULT false,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+CREATE TABLE public.schools (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  name character varying NOT NULL,
+  logo_url text,
+  address text,
+  phone character varying,
+  email character varying,
+  website character varying,
+  timezone character varying DEFAULT 'UTC'::character varying,
+  academic_year_start date,
+  academic_year_end date,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  school_key character varying UNIQUE,
+  CONSTRAINT schools_pkey PRIMARY KEY (id)
 );
-
--- ============================================
--- ANNOUNCEMENTS TABLE
--- ============================================
-CREATE TABLE IF NOT EXISTS announcements (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  school_id UUID REFERENCES schools(id) ON DELETE CASCADE,
-  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
-  title VARCHAR(255) NOT NULL,
-  content TEXT NOT NULL,
-  type VARCHAR(50), -- 'general', 'urgent', 'event', 'holiday'
-  target_role VARCHAR(50), -- 'all', 'student', 'teacher', 'parent'
-  target_class_id UUID REFERENCES classes(id) ON DELETE SET NULL,
-  scheduled_for TIMESTAMP WITH TIME ZONE,
-  status VARCHAR(20) DEFAULT 'published', -- 'draft', 'published', 'archived'
-  attachment_url TEXT,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+CREATE TABLE public.students (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  user_id uuid,
+  school_id uuid,
+  first_name character varying NOT NULL,
+  last_name character varying NOT NULL,
+  date_of_birth date,
+  gender character varying,
+  roll_number character varying,
+  grade character varying,
+  section character varying,
+  admission_date date,
+  status character varying DEFAULT 'active'::character varying,
+  address text,
+  emergency_contact character varying,
+  medical_info text,
+  photo_url text,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  email character varying,
+  CONSTRAINT students_pkey PRIMARY KEY (id),
+  CONSTRAINT students_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id),
+  CONSTRAINT students_school_id_fkey FOREIGN KEY (school_id) REFERENCES public.schools(id)
 );
-
--- ============================================
--- ANNOUNCEMENT RECIPIENTS TABLE
--- ============================================
-CREATE TABLE IF NOT EXISTS announcement_recipients (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  announcement_id UUID REFERENCES announcements(id) ON DELETE CASCADE,
-  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-  read_at TIMESTAMP WITH TIME ZONE,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  UNIQUE(announcement_id, user_id)
+CREATE TABLE public.teachers (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  user_id uuid,
+  school_id uuid,
+  first_name character varying NOT NULL,
+  last_name character varying NOT NULL,
+  email character varying NOT NULL UNIQUE,
+  phone character varying,
+  department character varying,
+  designation character varying,
+  qualification character varying,
+  hire_date date,
+  photo_url text,
+  status character varying DEFAULT 'active'::character varying,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT teachers_pkey PRIMARY KEY (id),
+  CONSTRAINT teachers_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id),
+  CONSTRAINT teachers_school_id_fkey FOREIGN KEY (school_id) REFERENCES public.schools(id)
 );
-
--- ============================================
--- ATTENDANCE TABLE
--- ============================================
-CREATE TABLE IF NOT EXISTS attendance (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  student_id UUID REFERENCES students(id) ON DELETE CASCADE,
-  class_id UUID REFERENCES classes(id) ON DELETE CASCADE,
-  date DATE NOT NULL,
-  status VARCHAR(20) NOT NULL, -- 'present', 'absent', 'late', 'excused'
-  marked_by UUID REFERENCES teachers(id) ON DELETE SET NULL,
-  notes TEXT,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  UNIQUE(student_id, class_id, date)
+CREATE TABLE public.user_roles (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  user_id uuid,
+  role_id uuid,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT user_roles_pkey PRIMARY KEY (id),
+  CONSTRAINT user_roles_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id),
+  CONSTRAINT user_roles_role_id_fkey FOREIGN KEY (role_id) REFERENCES public.roles(id)
 );
-
--- ============================================
--- INVOICES TABLE
--- ============================================
-CREATE TABLE IF NOT EXISTS invoices (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  student_id UUID REFERENCES students(id) ON DELETE CASCADE,
-  invoice_number VARCHAR(50) UNIQUE NOT NULL,
-  amount DECIMAL(10,2) NOT NULL,
-  due_date DATE,
-  status VARCHAR(20) DEFAULT 'unpaid', -- 'unpaid', 'paid', 'partial', 'overdue'
-  description TEXT,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+CREATE TABLE public.users (
+  id uuid NOT NULL,
+  email character varying NOT NULL UNIQUE,
+  first_name character varying,
+  last_name character varying,
+  phone character varying,
+  avatar_url text,
+  status character varying DEFAULT 'active'::character varying,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT users_pkey PRIMARY KEY (id),
+  CONSTRAINT users_id_fkey FOREIGN KEY (id) REFERENCES auth.users(id)
 );
-
--- ============================================
--- PAYMENTS TABLE
--- ============================================
-CREATE TABLE IF NOT EXISTS payments (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  invoice_id UUID REFERENCES invoices(id) ON DELETE CASCADE,
-  amount DECIMAL(10,2) NOT NULL,
-  payment_date DATE DEFAULT CURRENT_DATE,
-  payment_method VARCHAR(50),
-  transaction_id VARCHAR(100),
-  notes TEXT,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
--- ============================================
--- INDEXES FOR PERFORMANCE
--- ============================================
-CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
-CREATE INDEX IF NOT EXISTS idx_students_school ON students(school_id);
-CREATE INDEX IF NOT EXISTS idx_students_grade ON students(grade);
-CREATE INDEX IF NOT EXISTS idx_teachers_school ON teachers(school_id);
-CREATE INDEX IF NOT EXISTS idx_classes_school ON classes(school_id);
-CREATE INDEX IF NOT EXISTS idx_grades_student ON grades(student_id);
-CREATE INDEX IF NOT EXISTS idx_grades_class ON grades(class_id);
-CREATE INDEX IF NOT EXISTS idx_announcements_school ON announcements(school_id);
-CREATE INDEX IF NOT EXISTS idx_attendance_student ON attendance(student_id);
-CREATE INDEX IF NOT EXISTS idx_attendance_date ON attendance(date);
-
--- ============================================
--- ROW LEVEL SECURITY (RLS) POLICIES
--- ============================================
-
--- Enable RLS on all tables
-ALTER TABLE users ENABLE ROW LEVEL SECURITY;
-ALTER TABLE students ENABLE ROW LEVEL SECURITY;
-ALTER TABLE teachers ENABLE ROW LEVEL SECURITY;
-ALTER TABLE parents ENABLE ROW LEVEL SECURITY;
-ALTER TABLE classes ENABLE ROW LEVEL SECURITY;
-ALTER TABLE grades ENABLE ROW LEVEL SECURITY;
-ALTER TABLE announcements ENABLE ROW LEVEL SECURITY;
-
--- Example RLS Policy for students (users can only see students from their school)
--- Note: You'll need to customize these based on your specific requirements
-CREATE POLICY "Users can view students from their school" ON students
-  FOR SELECT
-  USING (auth.uid() IN (SELECT user_id FROM users));
-
--- ============================================
--- FUNCTIONS AND TRIGGERS
--- ============================================
-
--- Function to update updated_at timestamp
-CREATE OR REPLACE FUNCTION update_updated_at_column()
-RETURNS TRIGGER AS $$
-BEGIN
-  NEW.updated_at = NOW();
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
--- Apply updated_at trigger to relevant tables
-CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users
-  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-
-CREATE TRIGGER update_students_updated_at BEFORE UPDATE ON students
-  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-
-CREATE TRIGGER update_teachers_updated_at BEFORE UPDATE ON teachers
-  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-
-CREATE TRIGGER update_classes_updated_at BEFORE UPDATE ON classes
-  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-
-CREATE TRIGGER update_grades_updated_at BEFORE UPDATE ON grades
-  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-
-CREATE TRIGGER update_announcements_updated_at BEFORE UPDATE ON announcements
-  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();

@@ -1,15 +1,65 @@
-/**
- * Simple in-memory cache with TTL (Time To Live)
- * For a read-heavy backend, this reduces database queries
- */
+import fs from 'fs';
+import path from 'path';
 
 class SimpleCache {
   constructor() {
     this.cache = new Map();
     this.defaultTTL = 5 * 60 * 1000; // 5 minutes default
 
+    // File persistence setup
+    this.cacheDir = path.resolve(process.cwd(), '.cache');
+    this.cacheFile = path.join(this.cacheDir, 'data.json');
+    this.saveTimeout = null;
+
+    // Load existing cache
+    this.loadFromDisk();
+
     // Clean up expired entries every minute
     this.cleanupInterval = setInterval(() => this.cleanup(), 60 * 1000);
+  }
+
+  /**
+   * Load cache from disk
+   */
+  loadFromDisk() {
+    try {
+      if (fs.existsSync(this.cacheFile)) {
+        const rawData = fs.readFileSync(this.cacheFile, 'utf8');
+        const data = JSON.parse(rawData);
+
+        // Convert array back to Map and filter expired
+        const now = Date.now();
+        for (const [key, item] of data) {
+          if (now < item.expiresAt) {
+            this.cache.set(key, item);
+          }
+        }
+        console.log(`[CACHE] Loaded ${this.cache.size} entries from disk`);
+      }
+    } catch (err) {
+      console.error('[CACHE] Failed to load cache:', err.message);
+    }
+  }
+
+  /**
+   * Save cache to disk (debounced)
+   */
+  saveToDisk() {
+    if (this.saveTimeout) clearTimeout(this.saveTimeout);
+
+    this.saveTimeout = setTimeout(() => {
+      try {
+        if (!fs.existsSync(this.cacheDir)) {
+          fs.mkdirSync(this.cacheDir, { recursive: true });
+        }
+
+        // Convert Map to array for JSON serialization
+        const data = Array.from(this.cache.entries());
+        fs.writeFileSync(this.cacheFile, JSON.stringify(data), 'utf8');
+      } catch (err) {
+        console.error('[CACHE] Failed to save cache:', err.message);
+      }
+    }, 1000); // Wait 1 second after last write to save
   }
 
   /**
@@ -23,6 +73,7 @@ class SimpleCache {
 
     if (Date.now() > item.expiresAt) {
       this.cache.delete(key);
+      this.saveToDisk();
       return null;
     }
 
@@ -43,6 +94,7 @@ class SimpleCache {
       value,
       expiresAt: Date.now() + ttl
     });
+    this.saveToDisk();
   }
 
   /**
@@ -51,6 +103,7 @@ class SimpleCache {
    */
   delete(key) {
     this.cache.delete(key);
+    this.saveToDisk();
   }
 
   /**
@@ -59,11 +112,14 @@ class SimpleCache {
    */
   deletePattern(pattern) {
     const prefix = pattern.replace('*', '');
+    let modified = false;
     for (const key of this.cache.keys()) {
       if (key.startsWith(prefix)) {
         this.cache.delete(key);
+        modified = true;
       }
     }
+    if (modified) this.saveToDisk();
   }
 
   /**
@@ -71,6 +127,7 @@ class SimpleCache {
    */
   clear() {
     this.cache.clear();
+    this.saveToDisk();
   }
 
   /**
@@ -78,11 +135,14 @@ class SimpleCache {
    */
   cleanup() {
     const now = Date.now();
+    let modified = false;
     for (const [key, item] of this.cache.entries()) {
       if (now > item.expiresAt) {
         this.cache.delete(key);
+        modified = true;
       }
     }
+    if (modified) this.saveToDisk();
   }
 
   /**
@@ -101,6 +161,19 @@ class SimpleCache {
   destroy() {
     if (this.cleanupInterval) {
       clearInterval(this.cleanupInterval);
+    }
+    if (this.saveTimeout) {
+      clearTimeout(this.saveTimeout);
+      // Force immediate save on destroy/exit
+      try {
+        if (!fs.existsSync(this.cacheDir)) {
+          fs.mkdirSync(this.cacheDir, { recursive: true });
+        }
+        const data = Array.from(this.cache.entries());
+        fs.writeFileSync(this.cacheFile, JSON.stringify(data), 'utf8');
+      } catch (err) {
+        // ignore
+      }
     }
   }
 }

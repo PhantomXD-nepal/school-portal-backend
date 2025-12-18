@@ -1,22 +1,59 @@
-import { supabase } from '../config/supabase.js';
+import { supabase, supabaseAdmin } from '../config/supabase.js';
 
 /**
  * Get all announcements
  */
 export const getAnnouncements = async (req, res, next) => {
   try {
-    const { type, target_role } = req.query;
+    const schoolId = req.headers['x-school-id'];
 
-    let query = supabase
+    if (!schoolId) {
+      return res.status(400).json({
+        success: false,
+        error: 'School ID is required'
+      });
+    }
+
+    // Get user's role from the authenticated user
+    let userRole = null;
+    if (req.user) {
+      // Fetch user role from database
+      const { data: userRoles, error: roleError } = await supabaseAdmin
+        .from('user_roles')
+        .select('role:roles(name)')
+        .eq('user_id', req.user.id);
+
+      if (!roleError && userRoles && userRoles.length > 0) {
+        userRole = userRoles[0].role?.name;
+      } else {
+        // Fallback to metadata
+        userRole = req.user.user_metadata?.role;
+      }
+    }
+
+    // Build query - get all announcements for this school
+    let query = supabaseAdmin
       .from('announcements')
-      .select('*');
+      .select('*')
+      .eq('school_id', schoolId);
 
-    if (type) query = query.eq('type', type);
-    if (target_role) query = query.eq('target_role', target_role);
+    // If user is authenticated, filter by target_role
+    // Show announcements targeted to 'all' OR to the user's specific role
+    if (userRole) {
+      query = query.or(`target_role.eq.all,target_role.eq.${userRole}`);
+    } else {
+      // If no authenticated user, only show 'all' announcements
+      query = query.eq('target_role', 'all');
+    }
 
+    // Execute query with ordering
     const { data: announcements, error } = await query.order('created_at', { ascending: false });
 
+    const { data:ann, err} = await supabaseAdmin.from('announcements').select('*');
+    console.log(ann, err);
+
     if (error) {
+      console.error('Error fetching announcements:', error);
       return res.status(400).json({
         success: false,
         error: error.message
@@ -25,8 +62,8 @@ export const getAnnouncements = async (req, res, next) => {
 
     res.json({
       success: true,
-      count: announcements.length,
-      data: announcements
+      count: announcements ? announcements.length : 0,
+      data: announcements || []
     });
   } catch (error) {
     next(error);
@@ -67,12 +104,22 @@ export const getAnnouncementById = async (req, res, next) => {
  */
 export const createAnnouncement = async (req, res, next) => {
   try {
+    const schoolId = req.headers['x-school-id'];
+
+    if (!schoolId) {
+      return res.status(400).json({
+        success: false,
+        error: 'School ID is required to create an announcement'
+      });
+    }
+
     const announcementData = {
       ...req.body,
+      school_id: schoolId,
       created_by: req.user.id
     };
 
-    const { data: announcement, error } = await supabase
+    const { data: announcement, error } = await supabaseAdmin
       .from('announcements')
       .insert([announcementData])
       .select()

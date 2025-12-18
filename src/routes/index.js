@@ -5,6 +5,8 @@ import teacherRoutes from './teacherRoutes.js';
 import classRoutes from './classRoutes.js';
 import gradeRoutes from './gradeRoutes.js';
 import announcementRoutes from './announcementRoutes.js';
+import aiRoutes from './aiRoutes.js';
+import eventRoutes from './eventRoutes.js';
 
 import schoolRoutes from './schoolRoutes.js';
 
@@ -33,5 +35,7 @@ router.use('/teachers', teacherRoutes);
 router.use('/classes', classRoutes);
 router.use('/grades', gradeRoutes);
 router.use('/announcements', announcementRoutes);
+router.use('/ai', aiRoutes);
+router.use('/events', eventRoutes);
 
 export default router;
