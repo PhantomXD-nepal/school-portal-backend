@@ -1,51 +1,40 @@
-import { supabaseAdmin } from '../config/supabase.js';
-import { ApiError, ErrorTypes, mapDatabaseError } from '../utils/apiError.js';
-import logger, { logDatabase } from '../utils/logger.js';
-import crypto from 'crypto';
-import cache, { cacheKeys, cacheTTL } from '../utils/cache.js';
+import { supabaseAdmin } from "../config/supabase.js";
+import { ApiError, ErrorTypes, mapDatabaseError } from "../utils/apiError.js";
+import logger, { logDatabase } from "../utils/logger.js";
+import crypto from "crypto";
+import cache, { cacheKeys, cacheTTL } from "../utils/cache.js";
 
 /**
  * Generate a random school key
  */
 const generateSchoolKey = () => {
-  return crypto.randomBytes(4).toString('hex').toUpperCase(); // 8 character hex string
+  return crypto.randomBytes(4).toString("hex").toUpperCase(); // 8 character hex string
 };
 
 /**
- * Create a new school
+ * Create a new school (with cache invalidation)
  */
 export const createSchool = async (req, res, next) => {
   try {
-    const {
-      name, address, phone, email, website,
-      timezone, academic_year_start, academic_year_end
-    } = req.body;
+    const { name, address, phone, email, website, timezone, academic_year_start, academic_year_end } = req.body;
 
     if (!name) {
-      throw ErrorTypes.MISSING_REQUIRED_FIELD('name');
+      throw ErrorTypes.MISSING_REQUIRED_FIELD("name");
     }
 
     // Check if school with same name exists
-    const { data: existingSchool } = await supabaseAdmin
-      .from('schools')
-      .select('id')
-      .eq('name', name)
-      .single();
+    const { data: existingSchool } = await supabaseAdmin.from("schools").select("id").eq("name", name).single();
 
     if (existingSchool) {
-      throw ErrorTypes.ALREADY_EXISTS('A school with this name');
+      throw ErrorTypes.ALREADY_EXISTS("A school with this name");
     }
 
     // Check if email is already used
     if (email) {
-      const { data: emailExists } = await supabaseAdmin
-        .from('schools')
-        .select('id')
-        .eq('email', email)
-        .single();
+      const { data: emailExists } = await supabaseAdmin.from("schools").select("id").eq("email", email).single();
 
       if (emailExists) {
-        throw ErrorTypes.ALREADY_EXISTS('A school with this email');
+        throw ErrorTypes.ALREADY_EXISTS("A school with this email");
       }
     }
 
@@ -56,11 +45,7 @@ export const createSchool = async (req, res, next) => {
     const maxAttempts = 10;
 
     while (!isUnique && attempts < maxAttempts) {
-      const { data } = await supabaseAdmin
-        .from('schools')
-        .select('id')
-        .eq('school_key', schoolKey)
-        .single();
+      const { data } = await supabaseAdmin.from("schools").select("id").eq("school_key", schoolKey).single();
 
       if (!data) {
         isUnique = true;
@@ -71,7 +56,7 @@ export const createSchool = async (req, res, next) => {
     }
 
     if (!isUnique) {
-      throw ErrorTypes.INTERNAL_ERROR('Failed to generate unique school key');
+      throw ErrorTypes.INTERNAL_ERROR("Failed to generate unique school key");
     }
 
     const schoolData = {
@@ -81,16 +66,12 @@ export const createSchool = async (req, res, next) => {
       phone,
       email,
       website,
-      timezone: timezone || 'UTC',
+      timezone: timezone || "UTC",
       academic_year_start,
       academic_year_end,
     };
 
-    const { data: school, error } = await supabaseAdmin
-      .from('schools')
-      .insert([schoolData])
-      .select()
-      .single();
+    const { data: school, error } = await supabaseAdmin.from("schools").insert([schoolData]).select().single();
 
     if (error) {
       throw mapDatabaseError(error);
@@ -98,30 +79,34 @@ export const createSchool = async (req, res, next) => {
 
     // If user is authenticated, link them as admin of this school
     if (req.user) {
-      const { error: adminError } = await supabaseAdmin
-        .from('admins')
-        .insert([{
+      const { error: adminError } = await supabaseAdmin.from("admins").insert([
+        {
           user_id: req.user.id,
           school_id: school.id,
           first_name: req.user.user_metadata?.first_name,
           last_name: req.user.user_metadata?.last_name,
-        }]);
+        },
+      ]);
 
       if (adminError) {
-        logger.warn('Failed to link user as school admin', {
+        logger.warn("Failed to link user as school admin", {
           userId: req.user.id,
           schoolId: school.id,
-          error: adminError.message
+          error: adminError.message,
         });
       }
+
+      // Invalidate user's school access cache
+      cache.deletePattern(`school:access:${req.user.id}:*`);
+      cache.deletePattern(`schools:user:*`); // Invalidate all user school lists
     }
 
-    logDatabase('INSERT', 'schools', { schoolId: school.id });
-    logger.info('School created', { schoolId: school.id, name, createdBy: req.user?.id });
+    logDatabase("INSERT", "schools", { schoolId: school.id });
+    logger.info("School created", { schoolId: school.id, name, createdBy: req.user?.id });
 
     res.status(201).json({
       success: true,
-      message: 'School created successfully',
+      message: "School created successfully",
       data: { school },
     });
   } catch (error) {
@@ -130,7 +115,7 @@ export const createSchool = async (req, res, next) => {
 };
 
 /**
- * Get all schools (Super Admin) or user's schools
+ * Get all schools (Super Admin) or user's schools (with comprehensive caching)
  * For students: Returns their school with announcements, grades, and attendance
  * For admins/teachers: Returns list of schools they have access to
  */
@@ -140,100 +125,133 @@ export const getSchools = async (req, res, next) => {
     const userEmail = req.user?.email;
     const userId = req.user?.id;
 
+    // Create cache key that includes query parameters
+    const cacheKey = `${cacheKeys.schools(userEmail)}:${search || ""}:${status || ""}`;
+
     // Check cache first
-    const cacheKey = cacheKeys.schools(userEmail);
     const cachedData = cache.get(cacheKey);
     if (cachedData) {
+      logger.debug("Schools data served from cache", { userEmail, search, status });
       return res.json(cachedData);
     }
 
+    logger.debug("Fetching schools from database", { userEmail, search, status });
+
     // First, check if user is a student (by email)
     const { data: student } = await supabaseAdmin
-      .from('students')
-      .select('id, first_name, last_name, email, school_id, grade, section, roll_number, status')
-      .eq('email', userEmail)
+      .from("students")
+      .select("id, first_name, last_name, email, school_id, grade, section, roll_number, status")
+      .eq("email", userEmail)
       .single();
 
     if (student) {
       // User is a student - return their school with student-specific data
       logger.info("Student accessing schools endpoint", { studentId: student.id, schoolId: student.school_id });
 
-      // Get school info
-      const { data: school } = await supabaseAdmin
-        .from('schools')
-        .select('id, name, school_key, address, phone, email, logo_url, website, timezone')
-        .eq('id', student.school_id)
-        .single();
+      // Get school info (check cache first for school data)
+      const schoolCacheKey = cacheKeys.school(student.school_id);
+      let school = cache.get(schoolCacheKey);
+
+      if (!school) {
+        const { data } = await supabaseAdmin
+          .from("schools")
+          .select("id, name, school_key, address, phone, email, logo_url, website, timezone")
+          .eq("id", student.school_id)
+          .single();
+
+        school = data;
+        if (school) {
+          cache.set(schoolCacheKey, school, cacheTTL.LONG);
+        }
+      }
 
       if (!school) {
         return res.json({
           success: true,
-          data: { schools: [], count: 0, role: 'student' }
+          data: { schools: [], count: 0, role: "student" },
         });
       }
 
       // Get announcements for this student
       const { data: announcements } = await supabaseAdmin
-        .from('announcements')
-        .select('id, title, content, type, created_at')
-        .eq('school_id', student.school_id)
-        .or('target_role.eq.student,target_role.eq.all,target_role.is.null')
-        .eq('status', 'published')
-        .order('created_at', { ascending: false })
+        .from("announcements")
+        .select("id, title, content, type, created_at")
+        .eq("school_id", student.school_id)
+        .or("target_role.eq.student,target_role.eq.all,target_role.is.null")
+        .eq("status", "published")
+        .order("created_at", { ascending: false })
         .limit(5);
 
       // Get student's grades
       const { data: grades } = await supabaseAdmin
-        .from('grades')
-        .select('id, subject, assessment_type, score, max_score, percentage, grade, assessment_date, comments')
-        .eq('student_id', student.id)
-        .order('assessment_date', { ascending: false })
+        .from("grades")
+        .select("id, subject, assessment_type, score, max_score, percentage, grade, assessment_date, comments")
+        .eq("student_id", student.id)
+        .order("assessment_date", { ascending: false })
         .limit(10);
 
       // Get student's attendance (recent)
       const { data: attendanceRecords } = await supabaseAdmin
-        .from('attendance')
-        .select('id, date, status, notes')
-        .eq('student_id', student.id)
-        .order('date', { ascending: false })
+        .from("attendance")
+        .select("id, date, status, notes")
+        .eq("student_id", student.id)
+        .order("date", { ascending: false })
         .limit(30);
 
       // Calculate attendance summary
       const attendanceSummary = {
         total: attendanceRecords?.length || 0,
-        present: attendanceRecords?.filter(a => a.status === 'present').length || 0,
-        absent: attendanceRecords?.filter(a => a.status === 'absent').length || 0,
-        late: attendanceRecords?.filter(a => a.status === 'late').length || 0,
-        excused: attendanceRecords?.filter(a => a.status === 'excused').length || 0,
-        percentage: attendanceRecords?.length > 0
-          ? Math.round((attendanceRecords.filter(a => a.status === 'present' || a.status === 'late').length / attendanceRecords.length) * 100)
-          : 100
+        present: attendanceRecords?.filter((a) => a.status === "present").length || 0,
+        absent: attendanceRecords?.filter((a) => a.status === "absent").length || 0,
+        late: attendanceRecords?.filter((a) => a.status === "late").length || 0,
+        excused: attendanceRecords?.filter((a) => a.status === "excused").length || 0,
+        percentage:
+          attendanceRecords?.length > 0
+            ? Math.round(
+                (attendanceRecords.filter((a) => a.status === "present" || a.status === "late").length /
+                  attendanceRecords.length) *
+                  100,
+              )
+            : 100,
       };
 
       // If no real attendance data, provide dummy data
-      const attendance = attendanceRecords?.length > 0 ? {
-        summary: attendanceSummary,
-        recent: attendanceRecords.slice(0, 7)
-      } : {
-        summary: {
-          total: 22,
-          present: 18,
-          absent: 2,
-          late: 2,
-          excused: 0,
-          percentage: 91
-        },
-        recent: [
-          { id: '1', date: new Date().toISOString().split('T')[0], status: 'present', notes: null },
-          { id: '2', date: new Date(Date.now() - 86400000).toISOString().split('T')[0], status: 'present', notes: null },
-          { id: '3', date: new Date(Date.now() - 172800000).toISOString().split('T')[0], status: 'late', notes: 'Arrived 10 minutes late' }
-        ]
-      };
+      const attendance =
+        attendanceRecords?.length > 0
+          ? {
+              summary: attendanceSummary,
+              recent: attendanceRecords.slice(0, 7),
+            }
+          : {
+              summary: {
+                total: 22,
+                present: 18,
+                absent: 2,
+                late: 2,
+                excused: 0,
+                percentage: 91,
+              },
+              recent: [
+                { id: "1", date: new Date().toISOString().split("T")[0], status: "present", notes: null },
+                {
+                  id: "2",
+                  date: new Date(Date.now() - 86400000).toISOString().split("T")[0],
+                  status: "present",
+                  notes: null,
+                },
+                {
+                  id: "3",
+                  date: new Date(Date.now() - 172800000).toISOString().split("T")[0],
+                  status: "late",
+                  notes: "Arrived 10 minutes late",
+                },
+              ],
+            };
 
       const responseData = {
         success: true,
         data: {
-          role: 'student',
+          role: "student",
           student: {
             id: student.id,
             name: `${student.first_name} ${student.last_name}`,
@@ -241,62 +259,68 @@ export const getSchools = async (req, res, next) => {
             grade: student.grade,
             section: student.section,
             rollNumber: student.roll_number,
-            status: student.status
+            status: student.status,
           },
           school: school,
           announcements: announcements || [],
           grades: grades || [],
           attendance: attendance,
           schools: [school],
-          count: 1
-        }
+          count: 1,
+        },
       };
 
-      // Cache for 1 minute
+      // Cache student data for 1 minute (changes more frequently)
       cache.set(cacheKey, responseData, cacheTTL.SHORT);
       return res.json(responseData);
     }
 
     // Not a student - check if admin or teacher
-    let query = supabaseAdmin.from('schools').select('*');
+    let query = supabaseAdmin.from("schools").select("*");
 
     if (userId) {
-      // Check if super admin
-      const { data: superAdmin } = await supabaseAdmin
-        .from('admins')
-        .select('id')
-        .eq('user_id', userId)
-        .is('school_id', null)
-        .single();
+      // Check if super admin (cached by school middleware)
+      const superAdminCacheKey = `school:superadmin:${userId}`;
+      let isSuperAdmin = cache.get(superAdminCacheKey);
 
-      if (!superAdmin) {
+      if (isSuperAdmin === null || isSuperAdmin === undefined) {
+        const { data: superAdmin } = await supabaseAdmin
+          .from("admins")
+          .select("id")
+          .eq("user_id", userId)
+          .is("school_id", null)
+          .single();
+
+        isSuperAdmin = !!superAdmin;
+        cache.set(superAdminCacheKey, isSuperAdmin, cacheTTL.LONG);
+      }
+
+      if (!isSuperAdmin) {
         // Get schools user has access to (check by email for teachers)
-        const { data: adminSchools } = await supabaseAdmin
-          .from('admins')
-          .select('school_id')
-          .eq('user_id', userId);
+        const { data: adminSchools } = await supabaseAdmin.from("admins").select("school_id").eq("user_id", userId);
 
         const { data: teacherSchools } = await supabaseAdmin
-          .from('teachers')
-          .select('school_id')
-          .eq('email', userEmail);
+          .from("teachers")
+          .select("school_id")
+          .eq("email", userEmail);
 
         const schoolIds = [
-          ...(adminSchools || []).map(a => a.school_id),
-          ...(teacherSchools || []).map(t => t.school_id),
+          ...(adminSchools || []).map((a) => a.school_id),
+          ...(teacherSchools || []).map((t) => t.school_id),
         ].filter(Boolean);
 
         if (schoolIds.length > 0) {
-          query = query.in('id', [...new Set(schoolIds)]);
+          query = query.in("id", [...new Set(schoolIds)]);
         } else {
           const responseData = {
             success: true,
             data: {
               schools: [],
               count: 0,
-              role: 'unknown'
+              role: "unknown",
             },
           };
+          // Cache empty result for 2 minutes
           cache.set(cacheKey, responseData, cacheTTL.SHORT);
           return res.json(responseData);
         }
@@ -308,28 +332,30 @@ export const getSchools = async (req, res, next) => {
     }
 
     if (status) {
-      query = query.eq('status', status);
+      query = query.eq("status", status);
     }
 
-    const { data: schools, error } = await query.order('created_at', { ascending: false });
+    const { data: schools, error } = await query.order("created_at", { ascending: false });
 
     if (error) {
       throw mapDatabaseError(error);
     }
 
-    logDatabase('SELECT', 'schools', { count: schools.length, userId });
+    logDatabase("SELECT", "schools", { count: schools.length, userId });
 
     const responseData = {
       success: true,
       data: {
         schools,
         count: schools.length,
-        role: 'admin'
+        role: "admin",
       },
     };
 
-    // Cache for 5 minutes
-    cache.set(cacheKey, responseData, cacheTTL.MEDIUM);
+    // Cache for 5 minutes (or 2 minutes if search/filter is applied)
+    const ttl = search || status ? cacheTTL.SHORT : cacheTTL.MEDIUM;
+    cache.set(cacheKey, responseData, ttl);
+
     res.json(responseData);
   } catch (error) {
     next(error);
@@ -337,7 +363,7 @@ export const getSchools = async (req, res, next) => {
 };
 
 /**
- * Get school by ID
+ * Get school by ID (with caching)
  */
 export const getSchoolById = async (req, res, next) => {
   try {
@@ -346,39 +372,38 @@ export const getSchoolById = async (req, res, next) => {
     // Check cache first
     const cacheKey = cacheKeys.school(id);
     const cachedData = cache.get(cacheKey);
+
     if (cachedData) {
-      return res.json(cachedData);
+      logger.debug("School detail served from cache", { schoolId: id });
+      return res.json({
+        success: true,
+        data: { school: cachedData },
+      });
     }
 
-    const { data: school, error } = await supabaseAdmin
-      .from('schools')
-      .select('*')
-      .eq('id', id)
-      .single();
+    const { data: school, error } = await supabaseAdmin.from("schools").select("*").eq("id", id).single();
 
     if (error) {
-      if (error.code === 'PGRST116') {
-        throw ErrorTypes.NOT_FOUND('School');
+      if (error.code === "PGRST116") {
+        throw ErrorTypes.NOT_FOUND("School");
       }
       throw mapDatabaseError(error);
     }
 
-    const responseData = {
+    // Cache the school data (not the full response)
+    cache.set(cacheKey, school, cacheTTL.LONG);
+
+    res.json({
       success: true,
       data: { school },
-    };
-
-    // Cache for 15 minutes (school data rarely changes)
-    cache.set(cacheKey, responseData, cacheTTL.LONG);
-
-    res.json(responseData);
+    });
   } catch (error) {
     next(error);
   }
 };
 
 /**
- * Get school by school key
+ * Get school by school key (with caching)
  */
 export const getSchoolByKey = async (req, res, next) => {
   try {
@@ -388,39 +413,42 @@ export const getSchoolByKey = async (req, res, next) => {
     // Check cache first
     const cacheKey = cacheKeys.schoolByKey(normalizedKey);
     const cachedData = cache.get(cacheKey);
+
     if (cachedData) {
-      return res.json(cachedData);
+      logger.debug("School by key served from cache", { key: normalizedKey });
+      return res.json({
+        success: true,
+        data: { school: cachedData },
+      });
     }
 
     const { data: school, error } = await supabaseAdmin
-      .from('schools')
-      .select('id, name, logo_url, address, phone, email')
-      .eq('school_key', normalizedKey)
+      .from("schools")
+      .select("id, name, logo_url, address, phone, email")
+      .eq("school_key", normalizedKey)
       .single();
 
     if (error) {
-      if (error.code === 'PGRST116') {
-        throw ErrorTypes.NOT_FOUND('School with this key');
+      if (error.code === "PGRST116") {
+        throw ErrorTypes.NOT_FOUND("School with this key");
       }
       throw mapDatabaseError(error);
     }
 
-    const responseData = {
+    // Cache for 15 minutes
+    cache.set(cacheKey, school, cacheTTL.LONG);
+
+    res.json({
       success: true,
       data: { school },
-    };
-
-    // Cache for 15 minutes
-    cache.set(cacheKey, responseData, cacheTTL.LONG);
-
-    res.json(responseData);
+    });
   } catch (error) {
     next(error);
   }
 };
 
 /**
- * Update school
+ * Update school (with cache invalidation)
  */
 export const updateSchool = async (req, res, next) => {
   try {
@@ -434,33 +462,33 @@ export const updateSchool = async (req, res, next) => {
 
     // Verify school exists
     const { data: existingSchool, error: fetchError } = await supabaseAdmin
-      .from('schools')
-      .select('id')
-      .eq('id', id)
+      .from("schools")
+      .select("id, school_key")
+      .eq("id", id)
       .single();
 
     if (fetchError || !existingSchool) {
-      throw ErrorTypes.NOT_FOUND('School');
+      throw ErrorTypes.NOT_FOUND("School");
     }
 
     // Check for duplicate name if being updated
     if (updateData.name) {
       const { data: nameExists } = await supabaseAdmin
-        .from('schools')
-        .select('id')
-        .eq('name', updateData.name)
-        .neq('id', id)
+        .from("schools")
+        .select("id")
+        .eq("name", updateData.name)
+        .neq("id", id)
         .single();
 
       if (nameExists) {
-        throw ErrorTypes.ALREADY_EXISTS('A school with this name');
+        throw ErrorTypes.ALREADY_EXISTS("A school with this name");
       }
     }
 
     const { data: school, error } = await supabaseAdmin
-      .from('schools')
+      .from("schools")
       .update(updateData)
-      .eq('id', id)
+      .eq("id", id)
       .select()
       .single();
 
@@ -468,18 +496,15 @@ export const updateSchool = async (req, res, next) => {
       throw mapDatabaseError(error);
     }
 
-    // Invalidate cache for this school
-    cache.delete(cacheKeys.school(id));
-    if (school.school_key) {
-      cache.delete(cacheKeys.schoolByKey(school.school_key));
-    }
+    // Comprehensive cache invalidation
+    invalidateSchoolCache(id, existingSchool.school_key);
 
-    logDatabase('UPDATE', 'schools', { schoolId: id });
-    logger.info('School updated', { schoolId: id });
+    logDatabase("UPDATE", "schools", { schoolId: id });
+    logger.info("School updated", { schoolId: id });
 
     res.json({
       success: true,
-      message: 'School updated successfully',
+      message: "School updated successfully",
       data: { school },
     });
   } catch (error) {
@@ -488,7 +513,7 @@ export const updateSchool = async (req, res, next) => {
 };
 
 /**
- * Delete school
+ * Delete school (with cache invalidation)
  */
 export const deleteSchool = async (req, res, next) => {
   try {
@@ -496,55 +521,50 @@ export const deleteSchool = async (req, res, next) => {
 
     // Verify school exists
     const { data: existingSchool, error: fetchError } = await supabaseAdmin
-      .from('schools')
-      .select('id, name, school_key')
-      .eq('id', id)
+      .from("schools")
+      .select("id, name, school_key")
+      .eq("id", id)
       .single();
 
     if (fetchError || !existingSchool) {
-      throw ErrorTypes.NOT_FOUND('School');
+      throw ErrorTypes.NOT_FOUND("School");
     }
 
     // Check for dependencies before deleting
     const { count: studentCount } = await supabaseAdmin
-      .from('students')
-      .select('*', { count: 'exact', head: true })
-      .eq('school_id', id);
+      .from("students")
+      .select("*", { count: "exact", head: true })
+      .eq("school_id", id);
 
     const { count: teacherCount } = await supabaseAdmin
-      .from('teachers')
-      .select('*', { count: 'exact', head: true })
-      .eq('school_id', id);
+      .from("teachers")
+      .select("*", { count: "exact", head: true })
+      .eq("school_id", id);
 
     if (studentCount > 0 || teacherCount > 0) {
-      throw new ApiError(400,
+      throw new ApiError(
+        400,
         `Cannot delete school. This school has ${studentCount || 0} students and ${teacherCount || 0} teachers. Please remove them first.`,
         { students: studentCount, teachers: teacherCount },
-        'SCHOOL_HAS_DEPENDENCIES'
+        "SCHOOL_HAS_DEPENDENCIES",
       );
     }
 
-    const { error } = await supabaseAdmin
-      .from('schools')
-      .delete()
-      .eq('id', id);
+    const { error } = await supabaseAdmin.from("schools").delete().eq("id", id);
 
     if (error) {
       throw mapDatabaseError(error);
     }
 
-    // Invalidate cache for this school
-    cache.delete(cacheKeys.school(id));
-    if (existingSchool.school_key) {
-      cache.delete(cacheKeys.schoolByKey(existingSchool.school_key));
-    }
+    // Comprehensive cache invalidation
+    invalidateSchoolCache(id, existingSchool.school_key);
 
-    logDatabase('DELETE', 'schools', { schoolId: id });
-    logger.info('School deleted', { schoolId: id, name: existingSchool.name });
+    logDatabase("DELETE", "schools", { schoolId: id });
+    logger.info("School deleted", { schoolId: id, name: existingSchool.name });
 
     res.json({
       success: true,
-      message: 'School deleted successfully',
+      message: "School deleted successfully",
     });
   } catch (error) {
     next(error);
@@ -552,25 +572,36 @@ export const deleteSchool = async (req, res, next) => {
 };
 
 /**
- * Get school statistics
+ * Get school statistics (with caching)
  */
 export const getSchoolStats = async (req, res, next) => {
   try {
     const schoolId = req.schoolId;
 
-    const [
-      { count: studentCount },
-      { count: teacherCount },
-      { count: classCount },
-      { count: activeStudents },
-    ] = await Promise.all([
-      supabaseAdmin.from('students').select('*', { count: 'exact', head: true }).eq('school_id', schoolId),
-      supabaseAdmin.from('teachers').select('*', { count: 'exact', head: true }).eq('school_id', schoolId),
-      supabaseAdmin.from('classes').select('*', { count: 'exact', head: true }).eq('school_id', schoolId),
-      supabaseAdmin.from('students').select('*', { count: 'exact', head: true }).eq('school_id', schoolId).eq('status', 'active'),
-    ]);
+    // Check cache first
+    const cacheKey = cacheKeys.stats(schoolId);
+    const cachedData = cache.get(cacheKey);
 
-    res.json({
+    if (cachedData) {
+      logger.debug("School stats served from cache", { schoolId });
+      return res.json(cachedData);
+    }
+
+    logger.debug("Fetching school stats from database", { schoolId });
+
+    const [{ count: studentCount }, { count: teacherCount }, { count: classCount }, { count: activeStudents }] =
+      await Promise.all([
+        supabaseAdmin.from("students").select("*", { count: "exact", head: true }).eq("school_id", schoolId),
+        supabaseAdmin.from("teachers").select("*", { count: "exact", head: true }).eq("school_id", schoolId),
+        supabaseAdmin.from("classes").select("*", { count: "exact", head: true }).eq("school_id", schoolId),
+        supabaseAdmin
+          .from("students")
+          .select("*", { count: "exact", head: true })
+          .eq("school_id", schoolId)
+          .eq("status", "active"),
+      ]);
+
+    const responseData = {
       success: true,
       data: {
         stats: {
@@ -583,14 +614,45 @@ export const getSchoolStats = async (req, res, next) => {
         },
         charts: {
           attendance: [], // Placeholder
-          revenue: [] // Placeholder
+          revenue: [], // Placeholder
         },
       },
-    });
+    };
+
+    // Cache stats for 5 minutes (they change less frequently)
+    cache.set(cacheKey, responseData, cacheTTL.MEDIUM);
+
+    res.json(responseData);
   } catch (error) {
     next(error);
   }
 };
+
+/**
+ * Helper function to invalidate all school-related caches
+ */
+function invalidateSchoolCache(schoolId, schoolKey = null) {
+  // Delete specific school caches
+  cache.delete(cacheKeys.school(schoolId));
+  cache.delete(cacheKeys.stats(schoolId));
+
+  if (schoolKey) {
+    cache.delete(cacheKeys.schoolByKey(schoolKey));
+  }
+
+  // Clear all user school lists (they might include this school)
+  cache.deletePattern("schools:user:*");
+
+  // Clear school access patterns
+  cache.deletePattern(`school:access:*:${schoolId}`);
+
+  logger.debug("Invalidated all school caches", { schoolId });
+}
+
+/**
+ * Export helper for use in other modules
+ */
+export const invalidateSchoolDataCache = invalidateSchoolCache;
 
 export default {
   createSchool,
@@ -600,4 +662,5 @@ export default {
   updateSchool,
   deleteSchool,
   getSchoolStats,
+  invalidateSchoolDataCache,
 };
