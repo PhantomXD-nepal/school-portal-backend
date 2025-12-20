@@ -192,6 +192,13 @@ export const cacheKeys = {
   teacher: (id) => `teacher:${id}`,
   userSchool: (email) => `user-school:${email}`,
   stats: (schoolId) => `stats:${schoolId}`,
+  // Class management cache keys
+  classes: (schoolId) => `classes:${schoolId}`,
+  class: (id) => `class:${id}`,
+  classStudents: (classId) => `class:students:${classId}`,
+  syllabus: (classId) => `syllabus:${classId}`,
+  attendance: (classId, date) => `attendance:${classId}:${date}`,
+  teacherClasses: (teacherId) => `teacher:classes:${teacherId}`,
 };
 
 // Cache TTL values (in milliseconds)
