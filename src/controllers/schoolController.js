@@ -572,7 +572,7 @@ export const deleteSchool = async (req, res, next) => {
 };
 
 /**
- * Get school statistics (with caching)
+ * Get school statistics (with comprehensive attendance data and caching)
  */
 export const getSchoolStats = async (req, res, next) => {
   try {
@@ -589,17 +589,70 @@ export const getSchoolStats = async (req, res, next) => {
 
     logger.debug("Fetching school stats from database", { schoolId });
 
-    const [{ count: studentCount }, { count: teacherCount }, { count: classCount }, { count: activeStudents }] =
-      await Promise.all([
-        supabaseAdmin.from("students").select("*", { count: "exact", head: true }).eq("school_id", schoolId),
-        supabaseAdmin.from("teachers").select("*", { count: "exact", head: true }).eq("school_id", schoolId),
-        supabaseAdmin.from("classes").select("*", { count: "exact", head: true }).eq("school_id", schoolId),
-        supabaseAdmin
-          .from("students")
-          .select("*", { count: "exact", head: true })
-          .eq("school_id", schoolId)
-          .eq("status", "active"),
-      ]);
+    // Get today's date in YYYY-MM-DD format
+    const today = new Date().toISOString().split("T")[0];
+
+    // Get last 7 days for attendance chart
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    const weekStart = sevenDaysAgo.toISOString().split("T")[0];
+
+    // Parallel queries for better performance
+    const [
+      { count: studentCount },
+      { count: teacherCount },
+      { count: classCount },
+      { count: activeStudents },
+      { count: attendanceToday },
+      { data: attendanceTrend },
+      { count: presentToday },
+    ] = await Promise.all([
+      // Total students
+      supabaseAdmin.from("students").select("*", { count: "exact", head: true }).eq("school_id", schoolId),
+
+      // Total teachers
+      supabaseAdmin.from("teachers").select("*", { count: "exact", head: true }).eq("school_id", schoolId),
+
+      // Total classes
+      supabaseAdmin.from("classes").select("*", { count: "exact", head: true }).eq("school_id", schoolId),
+
+      // Active students
+      supabaseAdmin
+        .from("students")
+        .select("*", { count: "exact", head: true })
+        .eq("school_id", schoolId)
+        .eq("status", "active"),
+
+      // Today's total attendance records
+      supabaseAdmin
+        .from("attendance")
+        .select("*, students!inner(school_id)", { count: "exact", head: true })
+        .eq("students.school_id", schoolId)
+        .eq("date", today),
+
+      // Last 7 days attendance trend
+      supabaseAdmin
+        .from("attendance")
+        .select("date, status, students!inner(school_id)")
+        .eq("students.school_id", schoolId)
+        .gte("date", weekStart)
+        .lte("date", today)
+        .order("date", { ascending: true }),
+
+      // Today's present count
+      supabaseAdmin
+        .from("attendance")
+        .select("*, students!inner(school_id)", { count: "exact", head: true })
+        .eq("students.school_id", schoolId)
+        .eq("date", today)
+        .eq("status", "present"),
+    ]);
+
+    // Calculate attendance percentage for today
+    const attendanceRate = activeStudents > 0 ? Math.round((presentToday / activeStudents) * 100) : 0;
+
+    // Process attendance trend data for chart
+    const attendanceChart = processAttendanceTrend(attendanceTrend);
 
     const responseData = {
       success: true,
@@ -609,11 +662,13 @@ export const getSchoolStats = async (req, res, next) => {
           activeStudents: activeStudents || 0,
           totalTeachers: teacherCount || 0,
           totalClasses: classCount || 0,
-          attendanceToday: 0, // Placeholder until attendance module is implemented
+          attendanceToday: attendanceToday || 0,
+          attendanceRate: attendanceRate,
+          presentToday: presentToday || 0,
           revenueMonth: 0, // Placeholder until finance module is implemented
         },
         charts: {
-          attendance: [], // Placeholder
+          attendance: attendanceChart,
           revenue: [], // Placeholder
         },
       },
@@ -624,9 +679,212 @@ export const getSchoolStats = async (req, res, next) => {
 
     res.json(responseData);
   } catch (error) {
+    logger.error("Error fetching school stats", { error: error.message, schoolId: req.schoolId });
     next(error);
   }
 };
+
+/**
+ * Process attendance trend data for charting
+ * Groups by date and calculates present/absent/late counts
+ */
+function processAttendanceTrend(attendanceData) {
+  if (!attendanceData || attendanceData.length === 0) {
+    return [];
+  }
+
+  // Group by date
+  const groupedByDate = attendanceData.reduce((acc, record) => {
+    const date = record.date;
+    if (!acc[date]) {
+      acc[date] = {
+        date,
+        present: 0,
+        absent: 0,
+        late: 0,
+        excused: 0,
+        total: 0,
+      };
+    }
+
+    acc[date].total++;
+
+    switch (record.status.toLowerCase()) {
+      case "present":
+        acc[date].present++;
+        break;
+      case "absent":
+        acc[date].absent++;
+        break;
+      case "late":
+        acc[date].late++;
+        break;
+      case "excused":
+        acc[date].excused++;
+        break;
+    }
+
+    return acc;
+  }, {});
+
+  // Convert to array and calculate percentages
+  return Object.values(groupedByDate).map((day) => ({
+    date: day.date,
+    present: day.present,
+    absent: day.absent,
+    late: day.late,
+    excused: day.excused,
+    total: day.total,
+    attendanceRate: day.total > 0 ? Math.round((day.present / day.total) * 100) : 0,
+  }));
+}
+
+/**
+ * Get detailed attendance statistics (optional endpoint for more granular data)
+ */
+export const getAttendanceStats = async (req, res, next) => {
+  try {
+    const schoolId = req.schoolId;
+    const { startDate, endDate, classId, grade } = req.query;
+
+    // Validate dates
+    const start = startDate || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+    const end = endDate || new Date().toISOString().split("T")[0];
+
+    const cacheKey = `attendance:${schoolId}:${start}:${end}:${classId || "all"}:${grade || "all"}`;
+    const cachedData = cache.get(cacheKey);
+
+    if (cachedData) {
+      logger.debug("Attendance stats served from cache", { schoolId, start, end });
+      return res.json(cachedData);
+    }
+
+    // Build query
+    let query = supabaseAdmin
+      .from("attendance")
+      .select(
+        `
+        *,
+        students!inner(
+          id,
+          first_name,
+          last_name,
+          school_id,
+          grade,
+          section,
+          status
+        ),
+        classes(
+          id,
+          name,
+          grade,
+          section
+        )
+      `,
+      )
+      .eq("students.school_id", schoolId)
+      .gte("date", start)
+      .lte("date", end);
+
+    // Apply filters if provided
+    if (classId) {
+      query = query.eq("class_id", classId);
+    }
+
+    if (grade) {
+      query = query.eq("students.grade", grade);
+    }
+
+    const { data: attendanceRecords, error } = await query.order("date", { ascending: false });
+
+    if (error) {
+      throw mapDatabaseError(error);
+    }
+
+    // Calculate statistics
+    const stats = calculateAttendanceStats(attendanceRecords);
+
+    // Group by student for individual attendance rates
+    const studentAttendance = calculateStudentAttendance(attendanceRecords);
+
+    const responseData = {
+      success: true,
+      data: {
+        dateRange: { start, end },
+        summary: stats,
+        byStudent: studentAttendance,
+        records: attendanceRecords,
+      },
+    };
+
+    // Cache for 10 minutes
+    cache.set(cacheKey, responseData, cacheTTL.MEDIUM);
+
+    res.json(responseData);
+  } catch (error) {
+    logger.error("Error fetching attendance stats", { error: error.message, schoolId: req.schoolId });
+    next(error);
+  }
+};
+
+/**
+ * Calculate overall attendance statistics
+ */
+function calculateAttendanceStats(records) {
+  const total = records.length;
+  const statusCounts = records.reduce((acc, r) => {
+    const status = r.status.toLowerCase();
+    acc[status] = (acc[status] || 0) + 1;
+    return acc;
+  }, {});
+
+  return {
+    total,
+    present: statusCounts.present || 0,
+    absent: statusCounts.absent || 0,
+    late: statusCounts.late || 0,
+    excused: statusCounts.excused || 0,
+    attendanceRate: total > 0 ? Math.round(((statusCounts.present || 0) / total) * 100) : 0,
+  };
+}
+
+/**
+ * Calculate per-student attendance statistics
+ */
+function calculateStudentAttendance(records) {
+  const studentMap = {};
+
+  records.forEach((record) => {
+    const studentId = record.student_id;
+    if (!studentMap[studentId]) {
+      studentMap[studentId] = {
+        studentId,
+        studentName: `${record.students?.first_name || ""} ${record.students?.last_name || ""}`.trim(),
+        grade: record.students?.grade,
+        section: record.students?.section,
+        total: 0,
+        present: 0,
+        absent: 0,
+        late: 0,
+        excused: 0,
+      };
+    }
+
+    studentMap[studentId].total++;
+    const status = record.status.toLowerCase();
+    if (studentMap[studentId][status] !== undefined) {
+      studentMap[studentId][status]++;
+    }
+  });
+
+  // Calculate attendance rate for each student
+  return Object.values(studentMap)
+    .map((student) => ({
+      ...student,
+      attendanceRate: student.total > 0 ? Math.round((student.present / student.total) * 100) : 0,
+    }))
+    .sort((a, b) => b.attendanceRate - a.attendanceRate); // Sort by attendance rate
+}
 
 /**
  * Helper function to invalidate all school-related caches
@@ -639,6 +897,9 @@ function invalidateSchoolCache(schoolId, schoolKey = null) {
   if (schoolKey) {
     cache.delete(cacheKeys.schoolByKey(schoolKey));
   }
+
+  // Clear attendance-related caches
+  cache.deletePattern(`attendance:${schoolId}:*`);
 
   // Clear all user school lists (they might include this school)
   cache.deletePattern("schools:user:*");
@@ -662,5 +923,6 @@ export default {
   updateSchool,
   deleteSchool,
   getSchoolStats,
+  getAttendanceStats,
   invalidateSchoolDataCache,
 };
