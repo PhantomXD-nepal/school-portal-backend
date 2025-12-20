@@ -950,6 +950,7 @@ async function verifyTeacherClassAccess(userId, classId, schoolId) {
   // Get teacher record (check cache first)
   const teacherCacheKey = `teacher:user:${userId}`;
   let teacher = cache.get(teacherCacheKey);
+  console.log(userId, schoolId);
 
   if (!teacher) {
     const { data } = await supabaseAdmin

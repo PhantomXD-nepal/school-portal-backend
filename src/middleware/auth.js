@@ -249,4 +249,11 @@ export const invalidateAllAuthCache = () => {
   logger.info("Invalidated all auth caches");
 };
 
-export default { authenticate, authorize, optionalAuth, authorizeOwnerOrAdmin, invalidateUserCache, invalidateAllAuthCache };
+export default {
+  authenticate,
+  authorize,
+  optionalAuth,
+  authorizeOwnerOrAdmin,
+  invalidateUserCache,
+  invalidateAllAuthCache,
+};
