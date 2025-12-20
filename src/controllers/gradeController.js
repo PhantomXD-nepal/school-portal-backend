@@ -1,4 +1,5 @@
 import { supabase } from '../config/supabase.js';
+import { onGradePosted } from '../utils/cacheInvalidator.js';
 
 /**
  * Get grades with filters
@@ -84,6 +85,11 @@ export const postGrade = async (req, res, next) => {
       });
     }
 
+    // Invalidate grade caches
+    if (grade.student_id && grade.class_id) {
+      onGradePosted(grade.student_id, grade.class_id);
+    }
+
     res.status(201).json({
       success: true,
       message: 'Grade posted successfully',
@@ -116,6 +122,11 @@ export const updateGrade = async (req, res, next) => {
       });
     }
 
+    // Invalidate grade caches
+    if (grade.student_id && grade.class_id) {
+      onGradePosted(grade.student_id, grade.class_id);
+    }
+
     res.json({
       success: true,
       message: 'Grade updated successfully',
@@ -132,6 +143,7 @@ export const updateGrade = async (req, res, next) => {
 export const deleteGrade = async (req, res, next) => {
   try {
     const { id } = req.params;
+    const { student_id, class_id } = req.query; // Optional: pass these to invalidate cache
 
     const { error } = await supabase
       .from('grades')
@@ -143,6 +155,11 @@ export const deleteGrade = async (req, res, next) => {
         success: false,
         error: error.message
       });
+    }
+
+    // Invalidate grade caches if student/class info provided
+    if (student_id && class_id) {
+      onGradePosted(student_id, class_id);
     }
 
     res.json({
@@ -179,6 +196,18 @@ export const bulkUploadGrades = async (req, res, next) => {
         error: error.message
       });
     }
+
+    // Invalidate grade caches for each unique student/class combination
+    const invalidated = new Set();
+    data.forEach(grade => {
+      if (grade.student_id && grade.class_id) {
+        const key = `${grade.student_id}:${grade.class_id}`;
+        if (!invalidated.has(key)) {
+          onGradePosted(grade.student_id, grade.class_id);
+          invalidated.add(key);
+        }
+      }
+    });
 
     res.status(201).json({
       success: true,

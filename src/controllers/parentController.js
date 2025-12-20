@@ -1,4 +1,5 @@
 import { supabase, supabaseAdmin } from '../config/supabase.js';
+import { onStudentEnrolled } from '../utils/cacheInvalidator.js';
 
 /**
  * Register a student (child) for the logged-in parent
@@ -123,6 +124,9 @@ export const registerChild = async (req, res, next) => {
     if (relationError) {
       throw new Error(`Failed to link student to parent: ${relationError.message}`);
     }
+
+    // Invalidate student caches for this school
+    onStudentEnrolled(studentData.id, authUserId, schoolId);
 
     res.status(201).json({
       success: true,

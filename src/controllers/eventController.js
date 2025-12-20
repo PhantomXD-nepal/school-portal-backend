@@ -1,4 +1,5 @@
 import { supabase, supabaseAdmin } from '../config/supabase.js';
+import { onSchoolDataUpdated } from '../utils/cacheInvalidator.js';
 
 /**
  * Get events for a school
@@ -77,6 +78,9 @@ export const createEvent = async (req, res, next) => {
       });
     }
 
+    // Invalidate school data cache
+    onSchoolDataUpdated(schoolId);
+
     res.status(201).json({
       success: true,
       message: 'Event created successfully',
@@ -116,6 +120,11 @@ export const updateEvent = async (req, res, next) => {
       });
     }
 
+    // Invalidate school data cache
+    if (event.school_id) {
+      onSchoolDataUpdated(event.school_id);
+    }
+
     res.json({
       success: true,
       message: 'Event updated successfully',
@@ -132,6 +141,7 @@ export const updateEvent = async (req, res, next) => {
 export const deleteEvent = async (req, res, next) => {
   try {
     const { id } = req.params;
+    const schoolId = req.headers['x-school-id'];
 
     const { error } = await supabaseAdmin
       .from('events')
@@ -143,6 +153,11 @@ export const deleteEvent = async (req, res, next) => {
         success: false,
         error: error.message
       });
+    }
+
+    // Invalidate school data cache
+    if (schoolId) {
+      onSchoolDataUpdated(schoolId);
     }
 
     res.json({

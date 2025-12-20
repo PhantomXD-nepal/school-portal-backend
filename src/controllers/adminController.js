@@ -1,4 +1,10 @@
 import { supabase, supabaseAdmin } from '../config/supabase.js';
+import {
+  onTeacherAssigned,
+  onStudentEnrolled,
+  onParentAdded,
+  onUserRolesUpdated
+} from '../utils/cacheInvalidator.js';
 
 /**
  * Create a new user (Teacher, Parent, or School Admin)
@@ -189,6 +195,22 @@ export const createUser = async (req, res, next) => {
           .single();
         if (studentErr) throw studentErr;
         profileData = student;
+        break;
+    }
+
+    // 8. Invalidate caches based on role
+    switch (role) {
+      case 'teacher':
+        onTeacherAssigned(profileData.id, authUserId, targetSchoolId);
+        break;
+      case 'student':
+        onStudentEnrolled(profileData.id, authUserId, targetSchoolId);
+        break;
+      case 'parent':
+        onParentAdded(profileData.id, authUserId, targetSchoolId);
+        break;
+      case 'admin':
+        onUserRolesUpdated(authUserId);
         break;
     }
 

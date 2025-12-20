@@ -2,13 +2,15 @@ import { supabase, supabaseAdmin } from "../config/supabase.js";
 import { ApiError, ErrorTypes } from "../utils/apiError.js";
 import cache, { cacheTTL } from "../utils/cache.js";
 import logger, { logAuth } from "../utils/logger.js";
+import crypto from "crypto";
 
 /**
  * Middleware to verify authentication token
  */
 
 const authCacheKeys = {
-  userToken: (token) => `auth:token:${token.substring(0, 20)}`,
+  // Use SHA-256 hash of token to prevent collisions (headers are often identical)
+  userToken: (token) => `auth:token:${crypto.createHash("sha256").update(token).digest("hex")}`,
   userRoles: (userId) => `auth:roles:${userId}`,
   userSession: (userId) => `auth:session:${userId}`,
 };
@@ -226,4 +228,25 @@ export const authorizeOwnerOrAdmin = (getOwnerId) => {
   };
 };
 
-export default { authenticate, authorize, optionalAuth, authorizeOwnerOrAdmin };
+/**
+ * Invalidate user-related authentication caches
+ * @param {string} userId - UUID of the user
+ */
+export const invalidateUserCache = (userId) => {
+  if (!userId) return;
+  cache.delete(authCacheKeys.userRoles(userId));
+  cache.delete(authCacheKeys.userSession(userId));
+  // Note: We don't delete by token as we don't have the token here,
+  // but tokens are short-lived anyway (SHORT TTL).
+  logger.info(`Invalidated auth cache for user ${userId}`);
+};
+
+/**
+ * Invalidate all authentication-related caches
+ */
+export const invalidateAllAuthCache = () => {
+  cache.deletePattern("auth:*");
+  logger.info("Invalidated all auth caches");
+};
+
+export default { authenticate, authorize, optionalAuth, authorizeOwnerOrAdmin, invalidateUserCache, invalidateAllAuthCache };

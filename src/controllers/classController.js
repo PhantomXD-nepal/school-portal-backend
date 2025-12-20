@@ -909,6 +909,44 @@ async function verifyTeacherClassAccessCached(userId, classId, schoolId) {
  * Verify if a user (teacher) has access to a class
  */
 async function verifyTeacherClassAccess(userId, classId, schoolId) {
+  // 1. Check if user is an admin (check cache first)
+  const superAdminKey = `admin:super:${userId}`;
+  const schoolAdminKey = `admin:school:${userId}:${schoolId}`;
+
+  // Check super admin status first (doesn't depend on schoolId)
+  const isSuperAdmin = cache.get(superAdminKey);
+  if (isSuperAdmin === true) return true;
+
+  // Check school admin status
+  const isSchoolAdmin = cache.get(schoolAdminKey);
+  if (isSchoolAdmin === true) return true;
+
+  // If we don't know for sure they are NOT an admin (null means cache miss)
+  if (isSuperAdmin === null || isSchoolAdmin === null) {
+    const { data: adminRecord } = await supabaseAdmin
+      .from("admins")
+      .select("id, school_id")
+      .eq("user_id", userId)
+      .or(`school_id.is.null,school_id.eq.${schoolId}`)
+      .maybeSingle();
+
+    if (adminRecord) {
+      if (!adminRecord.school_id) {
+        cache.set(superAdminKey, true, cacheTTL.LONG); // 15 mins for super admin
+        return true;
+      } else {
+        cache.set(schoolAdminKey, true, cacheTTL.MEDIUM); // 5 mins for school admin
+        return true;
+      }
+    } else {
+      // Cache the negative result to avoid re-checking
+      // We only cache this if we know they are not a super admin AND not an admin for this school
+      cache.set(superAdminKey, false, cacheTTL.MEDIUM);
+      cache.set(schoolAdminKey, false, cacheTTL.MEDIUM);
+    }
+  }
+
+  // 2. Not an admin, check if user is an assigned teacher
   // Get teacher record (check cache first)
   const teacherCacheKey = `teacher:user:${userId}`;
   let teacher = cache.get(teacherCacheKey);
@@ -919,7 +957,7 @@ async function verifyTeacherClassAccess(userId, classId, schoolId) {
       .select("id")
       .eq("user_id", userId)
       .eq("school_id", schoolId)
-      .single();
+      .maybeSingle();
 
     teacher = data;
     if (teacher) {
